@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shortwave Radio</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <header>
+    <h1>Shortwave Radio</h1>
+    <span class="meta"><%= entries.length %> / <%= total %> broadcasts</span>
+    <span class="utc" id="utc-clock"></span>
+  </header>
+
+  <!-- Receiver selector -->
+  <div class="receiver-bar">
+    <span class="rx-label">Receiver:</span>
+    <select id="rx-continent">
+      <option value="">All continents</option>
+    </select>
+    <select id="rx-country">
+      <option value="">All countries</option>
+    </select>
+    <select id="rx-receiver">
+      <option value="">— select receiver —</option>
+    </select>
+    <span id="rx-info" class="rx-info"></span>
+    <button id="rx-reset" onclick="resetReceiver()">Use Twente</button>
+  </div>
+
+  <form class="filters" method="get" action="/">
+    <select name="lang">
+      <option value="">All languages</option>
+      <% languages.forEach(l => { %>
+        <option value="<%= l %>" <%= filters.lang === l ? 'selected' : '' %>><%= l %></option>
+      <% }) %>
+    </select>
+
+    <select name="station">
+      <option value="">All stations</option>
+      <% stations.forEach(s => { %>
+        <option value="<%= s %>" <%= filters.station === s ? 'selected' : '' %>><%= s %></option>
+      <% }) %>
+    </select>
+
+    <select name="target">
+      <option value="">All targets</option>
+      <% targets.forEach(t => { %>
+        <option value="<%= t %>" <%= filters.target === t ? 'selected' : '' %>><%= t %></option>
+      <% }) %>
+    </select>
+
+    <select name="band">
+      <option value="">All bands</option>
+      <% bandNames.forEach(b => { %>
+        <option value="<%= b %>" <%= filters.band === b ? 'selected' : '' %>><%= b %></option>
+      <% }) %>
+    </select>
+
+    <input type="search" name="q" placeholder="Search…" value="<%= filters.q || '' %>">
+
+    <label class="live-toggle">
+      <input type="checkbox" name="live" value="1" <%= filters.live === '1' ? 'checked' : '' %> onchange="this.form.submit()">
+      Live now
+    </label>
+
+    <input type="hidden" name="rx" id="rx-hidden" value="<%= filters.rx || '' %>">
+    <button type="submit">Filter</button>
+    <a class="reset" href="/">Reset</a>
+  </form>
+
+  <table>
+    <thead>
+      <tr>
+        <th>kHz</th>
+        <th>UTC</th>
+        <th>Days</th>
+        <th>Station</th>
+        <th>Language</th>
+        <th>Target</th>
+        <th>Mode</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <% entries.forEach(e => { %>
+      <tr class="<%= e.liveNow ? 'live' : '' %>">
+        <td class="khz"><%= e.khz %></td>
+        <td class="time"><%= e.utc_start.padStart(4,'0').slice(0,2) %>:<%= e.utc_start.padStart(4,'0').slice(2) %>–<%= e.utc_stop.padStart(4,'0').slice(0,2) %>:<%= e.utc_stop.padStart(4,'0').slice(2) %></td>
+        <td class="days"><%= e.days %></td>
+        <td><%= e.station %></td>
+        <td><%= e.language %></td>
+        <td><%= e.target %></td>
+        <td><%= e.mode %></td>
+        <td>
+          <a class="tune-btn"
+             data-khz="<%= e.khz %>"
+             data-mode="<%= e.mode.toLowerCase() %>"
+             href="#"
+             target="websdr"
+             onclick="return tune(this)">Tune</a>
+        </td>
+      </tr>
+      <% }) %>
+      <% if (entries.length === 0) { %>
+      <tr><td colspan="8" class="empty">No broadcasts match your filters.</td></tr>
+      <% } %>
+    </tbody>
+  </table>
+
+  <script>
+    // ── Receivers data ────────────────────────────────────────────────────────
+    const RECEIVERS = <%- receivers %>;
+
+    const TWENTE = { url: 'http://websdr.ewi.utwente.nl:8901', type: 'websdr' };
+    let activeReceiver = TWENTE;
+
+    // Build tune URL based on receiver type
+    function buildTuneUrl(rx, khz, mode) {
+      const m = mode === 'rtty' ? 'usb' : mode; // RTTY → USB on WebSDR
+      if (rx.type === 'kiwisdr') {
+        const km = m === 'am' ? 'am' : m === 'cw' ? 'cw' : m === 'fm' ? 'nbfm' : m;
+        return `${rx.url}/?f=${khz}&m=${km}`;
+      }
+      // websdr
+      return `${rx.url}/?tune=${khz}${m}`;
+    }
+
+    function tune(el) {
+      const khz  = el.dataset.khz;
+      const mode = el.dataset.mode;
+      const url  = buildTuneUrl(activeReceiver, khz, mode);
+      window.open(url, 'websdr');
+      return false;
+    }
+
+    // ── Continent/Country/Receiver cascades ───────────────────────────────────
+    const selContinent = document.getElementById('rx-continent');
+    const selCountry   = document.getElementById('rx-country');
+    const selReceiver  = document.getElementById('rx-receiver');
+    const rxInfo       = document.getElementById('rx-info');
+
+    const continents = [...new Set(RECEIVERS.map(r => r.continent))].sort();
+    continents.forEach(c => {
+      const o = document.createElement('option');
+      o.value = o.textContent = c;
+      selContinent.appendChild(o);
+    });
+
+    function populateCountries(continent) {
+      selCountry.innerHTML = '<option value="">All countries</option>';
+      selReceiver.innerHTML = '<option value="">— select receiver —</option>';
+      const countries = [...new Set(
+        RECEIVERS.filter(r => !continent || r.continent === continent)
+                 .map(r => r.country)
+      )].sort();
+      countries.forEach(c => {
+        const o = document.createElement('option');
+        o.value = o.textContent = c;
+        selCountry.appendChild(o);
+      });
+    }
+
+    function populateReceivers(continent, country) {
+      selReceiver.innerHTML = '<option value="">— select receiver —</option>';
+      RECEIVERS
+        .filter(r => (!continent || r.continent === continent) &&
+                     (!country  || r.country === country))
+        .forEach((r, i) => {
+          const o = document.createElement('option');
+          o.value = i; // use index into filtered array
+          o.dataset.idx = RECEIVERS.indexOf(r);
+          const users = r.users_max ? ` [${r.users}/${r.users_max}]` : '';
+          o.textContent = `${r.name.slice(0, 60)}${users}`;
+          selReceiver.appendChild(o);
+        });
+    }
+
+    selContinent.addEventListener('change', () => {
+      populateCountries(selContinent.value);
+      populateReceivers(selContinent.value, '');
+    });
+
+    selCountry.addEventListener('change', () => {
+      populateReceivers(selContinent.value, selCountry.value);
+    });
+
+    selReceiver.addEventListener('change', () => {
+      const opt = selReceiver.options[selReceiver.selectedIndex];
+      if (!opt || !opt.dataset.idx) {
+        resetReceiver(); return;
+      }
+      const idx = parseInt(opt.dataset.idx);
+      const rx = RECEIVERS[idx];
+      activeReceiver = rx;
+      rxInfo.textContent = rx.antenna ? `↯ ${rx.antenna.slice(0, 80)}` : '';
+      document.getElementById('rx-hidden').value = idx;
+    });
+
+    function resetReceiver() {
+      activeReceiver = TWENTE;
+      selReceiver.value = '';
+      rxInfo.textContent = '';
+      document.getElementById('rx-hidden').value = '';
+    }
+
+    // ── UTC clock ─────────────────────────────────────────────────────────────
+    function updateClock() {
+      const now = new Date();
+      const hh = String(now.getUTCHours()).padStart(2, '0');
+      const mm = String(now.getUTCMinutes()).padStart(2, '0');
+      const ss = String(now.getUTCSeconds()).padStart(2, '0');
+      document.getElementById('utc-clock').textContent = `UTC ${hh}:${mm}:${ss}`;
+    }
+    updateClock();
+    setInterval(updateClock, 1000);
+
+    // Init — restore receiver from URL param
+    const savedRx = '<%= filters.rx || "" %>';
+    populateCountries('');
+    populateReceivers('', '');
+
+    if (savedRx !== '') {
+      const idx = parseInt(savedRx);
+      const rx = RECEIVERS[idx];
+      if (rx) {
+        // Pre-select continent and country, then receiver
+        selContinent.value = rx.continent;
+        populateCountries(rx.continent);
+        selCountry.value = rx.country;
+        populateReceivers(rx.continent, rx.country);
+
+        // Find and select the matching option by dataset.idx
+        for (const opt of selReceiver.options) {
+          if (opt.dataset.idx === String(idx)) {
+            selReceiver.value = opt.value;
+            break;
+          }
+        }
+
+        activeReceiver = rx;
+        rxInfo.textContent = rx.antenna ? `↯ ${rx.antenna.slice(0, 80)}` : '';
+        document.getElementById('rx-hidden').value = idx;
+      }
+    }
+  </script>
+</body>
+</html>
